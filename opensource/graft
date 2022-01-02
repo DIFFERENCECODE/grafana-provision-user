@@ -1,0 +1,168 @@
+#!/usr/bin/env zsh
+# Reference: https://grafana.com/docs/grafana/latest/http_api/org/
+# Released on the assumption that this might be useful for others
+# PR's and suggestions welcome or fork it and fix it as you wish
+# Dedicated to Törkel and his tireless heroes (now a massive army)
+# Thanks for giving us Grafana
+# Copyleft Stichting DIFFERENCE The Netherlands
+# MIT License
+
+# No docs (yet). What it does (at least for the original author) as follows.
+# CLI script accepts at minimum two arguments like this example:
+# ` graft --user user@gmail.com --org "SOME LARGE ORGANIZATION" `
+# Creates the Org. Creates the user as a member of that Org and with Role as defined or by set by default
+# You may either --create a new Org or you may --add the new User to an already exiting Org.
+# Downloads the current dashboard of Org 3 (the canonical template in the case of the original author)
+# Updates the dashboard for the newly created Org with this dashboard.
+# Provisions standard datasources for the new Org (you can serialize your current datasources for this purpose with the Grafana API).
+# Dependencies besides Grafana are: zsh jq curl
+
+: ${4?"Usage is $0 --user <new user> --org <organization> [--create | --add ] [ --admin | --editor | --viewer ]  [--password <password>]"}
+
+# TODO list
+# Include option to generate a series of users under an Organization
+# Check outcome of API calls before proceeding with routine
+# Decide on strategy to create template variables for organizations and users in dashboards. Perhaps implement in influxdb and maintain the dataase record via this script
+# Option to first delete Org and User before creating with this script.
+
+source ~/.zshrc # source like this or define the alias in zsh parlance that we use here like this: 
+#PUT POST GET DELETE() {curl --silent -X $0 -H "Content-Type: application/json"  http://admin:$GRAFANA_ADMIN_PASSWD@$GRAFANA_SERVER:3333/api/$@ | jq '.'}
+
+
+## The following you can also define in a file that you source (like in the .zshrc above).
+# GRAFANA_ADMIN_PASSWD=your_grafana_admin_password
+# GRAFANA_SERVER=yourserver.com 
+# DEFAULT_GRAFANA_USER_PASSWD=your_default_user_password
+
+## set some defaults
+CREATEORG=1
+ROLE="Editor"
+
+for arg in "$@"
+do
+    case $arg in
+        -u|--user)
+        NEWUSER=$(echo $2 | tr '[A-Z]' '[a-z]')
+        shift 
+        shift 
+        ;;
+        -o|--org)
+        #ORG=$(echo $2 | sed 's/ /_/g' | tr '[A-Z]' '[a-z]')
+        ORG=$(echo $2 | tr '[a-z]' '[A-Z]')
+        shift 
+        shift 
+        ;;
+        -c|--create)
+        CREATEORG=1
+        shift 
+        ;;
+        -a|--add)
+        ADDTORG=1
+        shift 
+        ;;
+        -p|--password)
+        PASSWORD="$2"
+        shift 
+        shift 
+        ;;
+        -a|--admin)
+        ROLE="Admin"
+        shift 
+        ;;
+        -e|--editor)
+        ROLE="Editor"
+        shift 
+        ;;
+        -v|--viewer)
+        ROLE="Viewer"
+        shift 
+        ;;
+    esac
+done
+
+echo creating user and applying password
+curl -X PUT -d  password=${PASSWORD:-${DEFAULT_GRAFANA_USER_PASSWD}} http://admin:${GRAFANA_ADMIN_PASSWD}@${GRAFANA_SERVERi}:3333/api/admin/users/$(curl --silent -X POST -d  "email=$NEWUSER&password=null\&active=true" http://admin:${GRAFANA_ADMIN_PASSWD}@${GRAFANA_SERVER}:3333/api/admin/users|jq '.id')/password 
+
+echo "LINENO [$LINENO] user should now be created, so press <ENTER> or so to continue ..."
+read
+
+#break-out the compound above and then you do not need this line:
+USERID=$(GET users/lookup\?loginOrEmail=$NEWUSER| jq '.id')
+echo "NEWUSER is [ $NEWUSER ]\nORG is [ $ORG ]\nROLE is $ROLE\nPASSWORD is [ $PASSWORD ]\nUSERID is [ $USERID ]  \n"
+
+echo ........................
+read
+
+if [ "$CREATEORG" ]; then
+  echo CREATING ORG
+  export ORGID=$(curl  -X POST -H "Content-Type: Application/json" -d "{ \"name\": \"$ORG\" }"  http://admin:${GRAFANA_ADMIN_PASSWD}@${GRAFANA_SERVER}:3333/api/orgs|jq '.orgId')
+  echo JUST CREATED ORG And the ORGID is [ $ORGID ] 
+else
+echo blah
+fi
+
+echo "LINENO [$LINENO] ORG should now be created, so press <ENTER> or so to continue ..."
+read
+
+echo "at line $LINENO above existing RG extract ID ORGID is [ $ORGID ] "
+
+[ "$ORGID" ] || ORGID=$(GET orgs/name/$ORG | jq '.id')
+
+echo "at line $LINENO ORGID is [ $ORGID ] "
+
+echo CHANGE ACTIVE ORG AND ADD NEWUSER TO ORG [ $ORGID ] and with role [ $ROLE ]
+POST user/using/$ORGID 
+
+curl  -X POST -H "Content-Type":"Application/json" -d "{ \"role\":\"$ROLE\", \"loginOrEmail\": \"$NEWUSER\"  }"  http://admin:${GRAFANA_ADMIN_PASSWD}@${GRAFANA_SERVER}:3333/api/org/users |jq '.'
+
+echo TEST OF NEWUSER IN ORG WITH ORGID [ $ORGID ]
+GET orgs/$ORGID/users | jq '.'
+
+echo "line $LINENO : DELETE $USERID from ORG 1 and GREP CHECK THAT NOT THERE - Seems that there is a setting to always add new users to Org 1?"
+DELETE orgs/1/users/$USERID
+GET orgs/1/users|grep $USERID
+
+POST user/using/3 
+echo GET UPDATED TEMPLATE DASHBOARD
+GET dashboards/uid/meterbolic_standard_dashboard| jq '.dashboard.id = null | .dashboard.version = null | .dashboard.annotations.list[1:2][].enable=true |.dashboard.annotations.list[1:2][].hide=false | .dashboard += {
+   "folderId": 0,
+   "folderUid": "",
+   "folderTitle": "General",
+   "message": "Version diff notes here",
+   "overwrite": true
+}'>/home/ubuntu/3.json  
+
+echo change to ORG ID [ $ORGID ]
+POST user/using/$ORGID
+# no need # DELETE dashboards/uid/meterbolic_standard_dashboard 
+echo POST NEW OR UPDATE DASHBOARD to [ $ORGID ]
+POST dashboards/db -d @/home/ubuntu/3.json |jq '.'  
+
+echo UPDATE DATASOURCE
+POST datasources -d @/home/ubuntu/DIFFERENCECODE/meterbolic-grafana/grafana_devops/20210826_humanalyse_jq_yes_these_are_datasources.json 
+
+
+echo __END__
+
+#echo starring the dashboard - a noop, dunno 202111
+#POST user/stars/dashboard/$(GET search\?query=Standard%20Dashboard|jq '.[].id')
+
+#echo DELETE orgs/$orgId/users/$userId
+#DELETE orgs/$orgId/users/$userId
+
+# Commands
+# PUT admin/users/216/password -d '{"password":"logmein"}'
+
+# all the users in an org
+# GET orgs/1/users
+
+# list for when you want to delete users
+# GET users|jq --sort-keys '.[]|.id,.login'
+# delete user
+#  DELETE admin/users/:id
+# for i in `egrep userId  grafana_devops/delete_grafana_users_20210830 |sed 's/[^0-9]//g'  |head -3` ;do echo   "DELETE admin/users/$i |jq '.'"; done
+#
+# To delete dashboard
+# DELETE dashboards/uid/meterbolic_standard_dashboard
+# ORG="Sport Wellbeing" ;  curl  -X PUT -H "Content-Type: Application/json" -d "{ \"name\":\"$ORG\" }"  http://admin:$GRAFANA_ADMIN_PASSWD@localhost:3333/api/orgs/50 | jq '.'
+#
