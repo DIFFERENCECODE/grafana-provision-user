@@ -33,6 +33,8 @@ source ~/.zshrc # source like this or define the alias in zsh parlance that we u
 # GRAFANA_ADMIN_PASSWD=your_grafana_admin_password
 # GRAFANA_SERVER=yourserver.com 
 # DEFAULT_GRAFANA_USER_PASSWD=your_default_user_password
+# GRAFANA_DASHBOARD_TEMPLATE=grafana_dashboard_template.json   
+
 
 ## set some defaults
 CREATEORG=1
@@ -130,13 +132,13 @@ GET dashboards/uid/meterbolic_standard_dashboard| jq '.dashboard.id = null | .da
    "folderTitle": "General",
    "message": "Version diff notes here",
    "overwrite": true
-}'>/home/ubuntu/3.json  
+}'>$GRAFANA_DASHBOARD_TEMPLATE  
 
 echo change to ORG ID [ $ORGID ]
 POST user/using/$ORGID
 # no need # DELETE dashboards/uid/meterbolic_standard_dashboard 
 echo POST NEW OR UPDATE DASHBOARD to [ $ORGID ]
-POST dashboards/db -d @/home/ubuntu/3.json |jq '.'  
+POST dashboards/db -d @$GRAFANA_DASHBOARD_TEMPLATE |jq '.'  
 
 echo UPDATE DATASOURCE
 POST datasources -d @/home/ubuntu/DIFFERENCECODE/meterbolic-grafana/grafana_devops/20210826_humanalyse_jq_yes_these_are_datasources.json 
